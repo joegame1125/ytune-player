@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>YTune Player</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui; max-width: 600px; margin: 0 auto; padding: 16px; background: #000; color: #fff; }
+        input, button, select { width: 100%; padding: 14px; margin: 8px 0; border-radius: 12px; border: none; font-size: 16px; }
+        input, select { background: #1c1c1e; color: #fff; border: 1px solid #3a3a3c; }
+        button { background: #ff0000; color: #fff; font-weight: bold; cursor: pointer; }
+        button.secondary { background: #3a3a3c; }
+        audio { width: 100%; margin: 20px 0; }
+        .section { background: #1c1c1e; border-radius: 16px; padding: 16px; margin: 20px 0; }
+        .song-item { display: flex; justify-content: space-between; padding: 12px; background: #2c2c2e; margin: 8px 0; border-radius: 12px; }
+        .song-info { flex: 1; }
+        .song-title { font-weight: bold; }
+        .song-artist { font-size: 14px; color: #8e8e93; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="loginSection">
+        <h1 style="color:#f00;">登入</h1>
+        <input type="text" id="username" placeholder="帳號" value="admin">
+        <input type="password" id="password" placeholder="密碼">
+        <button id="loginBtn">登入</button>
+        <p id="loginMsg" style="color:#ff6b6b;"></p>
+    </div>
+    <div id="appSection" class="hidden">
+        <h1 style="color:#f00;">YTune Player</h1>
+        <audio id="audio" controls></audio>
+        <div id="nowPlaying"></div>
+        <div class="section">
+            <h2>搜尋</h2>
+            <input type="text" id="searchInput" placeholder="歌名或藝人">
+            <button id="searchBtn">搜尋</button>
+            <div id="searchResults"></div>
+        </div>
+        <div class="section">
+            <h2>歌單</h2>
+            <select id="playlistSelect"></select>
+            <button id="newPlaylistBtn" class="secondary">+ 新增歌單</button>
+            <button id="editPlaylistBtn" class="secondary">編輯</button>
+            <div id="playlistSongs"></div>
+        </div>
+        <div class="section">
+            <h2>設定</h2>
+            <button id="showStorageBtn">儲存空間管理</button>
+            <button id="logoutBtn" class="secondary">登出</button>
+        </div>
+    </div>
+    <div id="storageModal" class="hidden" style="position:fixed; top:20%; left:5%; width:90%; background:#1c1c1e; padding:20px; border-radius:16px;">
+        <h2>儲存空間</h2>
+        <p>快取檔案數：<span id="cacheCount">-</span></p>
+        <p>總容量：<span id="cacheSize">-</span> MB</p>
+        <button id="clearAllCacheBtn" style="background:#ff9500;">清空所有快取</button>
+        <button id="closeStorageBtn" class="secondary" style="margin-top:12px;">關閉</button>
+    </div>
+    <script>
+        let token = localStorage.getItem('token');
+        const API = '';
+        let playlists = {};
+        let currentPlaylist = '我的最愛';
+        let selectedSongs = new Set();
+
+        const loginSection = document.getElementById('loginSection');
+        const appSection = document.getElementById('appSection');
+        const audio = document.getElementById('audio');
+        const nowPlaying = document.getElementById('nowPlaying');
+
+        async function api(url, options = {}) {
+            const headers = { 'Content-Type': 'application/json', ...options.headers };
+            if (token) headers.Authorization = token;
+            const res = await fetch(API + url, { ...options, headers });
+            if (res.status === 401) { logout(); throw new Error('請重新登入'); }
+            return res;
+        }
+
+        async function login() {
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            try {
+                const res = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) });
+                const data = await res.json();
+                token = data.token;
+                localStorage.setItem('token', token);
+                showApp();
+            } catch (e) { document.getElementById('loginMsg').innerText = '登入失敗'; }
+        }
+
+        function logout() { localStorage.removeItem('token'); token = null; loginSection.classList.remove('hidden'); appSection.classList.add('hidden'); }
+
+        async function showApp() {
+            loginSection.classList.add('hidden');
+            appSection.classList.remove('hidden');
+            await loadPlaylists();
+            renderPlaylistSelect();
+            renderSongs();
+        }
+
+        async function loadPlaylists() {
+            const res = await api('/api/playlists');
+            playlists = await res.json();
+        }
+        async function savePlaylists() { await api('/api/playlists', { method: 'POST', body: JSON.stringify(playlists) }); }
+
+        function renderPlaylistSelect() {
+            const sel = document.getElementById('playlistSelect');
+            sel.innerHTML = Object.keys(playlists).map(n => `<option ${n===currentPlaylist?'selected':''}>${n}</option>`).join('');
+        }
+
+        async function renderSongs() {
+            const songs = playlists[currentPlaylist] || [];
+            const div = document.getElementById('playlistSongs');
+            if (!songs.length) { div.innerHTML = '<p>尚無歌曲</p>'; return; }
+            div.innerHTML = songs.map((s, i) => `
+                <div class="song-item">
+                    <input type="checkbox" class="songCheck" data-id="${s.id}" ${selectedSongs.has(s.id)?'checked':''}>
+                    <div class="song-info" onclick="play('${s.id}','${s.title}','${s.artist}')">
+                        <div class="song-title">${s.title}</div>
+                        <div class="song-artist">${s.artist}</div>
+                    </div>
+                </div>
+            `).join('');
+            document.querySelectorAll('.songCheck').forEach(cb => cb.addEventListener('change', e => {
+                e.target.checked ? selectedSongs.add(e.target.dataset.id) : selectedSongs.delete(e.target.dataset.id);
+            }));
+        }
+
+        async function play(id, title, artist) {
+            nowPlaying.innerText = `${title} - ${artist}`;
+            audio.src = API + `/api/audio/${id}`;
+            audio.play();
+        }
+
+        async function search(q) {
+            const div = document.getElementById('searchResults');
+            div.innerHTML = '搜尋中...';
+            const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
+            const songs = await res.json();
+            div.innerHTML = songs.map(s => `
+                <div class="song-item">
+                    <div class="song-info" onclick="play('${s.id}','${s.title}','${s.artist}')">
+                        <div class="song-title">${s.title}</div>
+                        <div class="song-artist">${s.artist}</div>
+                    </div>
+                    <button onclick="addToPlaylist('${s.id}','${s.title}','${s.artist}')">+</button>
+                </div>
+            `).join('');
+        }
+
+        function addToPlaylist(id, title, artist) {
+            if (!playlists[currentPlaylist]) playlists[currentPlaylist] = [];
+            if (playlists[currentPlaylist].some(s => s.id === id)) return alert('已存在');
+            playlists[currentPlaylist].push({ id, title, artist });
+            savePlaylists().then(() => renderSongs());
+        }
+
+        async function deleteSelected(deleteCache = false) {
+            if (selectedSongs.size === 0) return alert('請選取歌曲');
+            const ids = Array.from(selectedSongs);
+            if (deleteCache) {
+                await api('/api/cache', { method: 'DELETE', body: JSON.stringify({ ids }) });
+            }
+            playlists[currentPlaylist] = playlists[currentPlaylist].filter(s => !ids.includes(s.id));
+            selectedSongs.clear();
+            await savePlaylists();
+            renderSongs();
+        }
+
+        async function updateStorageUI() {
+            const res = await api('/api/cache/stats');
+            const d = await res.json();
+            document.getElementById('cacheCount').innerText = d.totalFiles;
+            document.getElementById('cacheSize').innerText = d.totalSizeMB;
+            document.getElementById('storageModal').classList.remove('hidden');
+        }
+
+        document.getElementById('loginBtn').onclick = login;
+        document.getElementById('logoutBtn').onclick = logout;
+        document.getElementById('searchBtn').onclick = () => search(document.getElementById('searchInput').value);
+        document.getElementById('playlistSelect').onchange = e => { currentPlaylist = e.target.value; selectedSongs.clear(); renderSongs(); };
+        document.getElementById('newPlaylistBtn').onclick = () => {
+            const name = prompt('新歌單名稱');
+            if (name && !playlists[name]) { playlists[name] = []; savePlaylists().then(() => { renderPlaylistSelect(); currentPlaylist = name; renderSongs(); }); }
+        };
+        document.getElementById('editPlaylistBtn').onclick = () => {
+            const div = document.getElementById('playlistSongs');
+            const btn = document.getElementById('editPlaylistBtn');
+            if (btn.innerText.includes('編輯')) {
+                btn.innerText = '完成';
+                div.insertAdjacentHTML('beforeend', '<div id="deleteActions" style="margin-top:16px;"><button onclick="deleteSelected(false)">從歌單移除</button><button onclick="deleteSelected(true)" style="background:#ff9500;">移除並刪除快取</button></div>');
+            } else {
+                btn.innerText = '編輯';
+                const da = document.getElementById('deleteActions');
+                if (da) da.remove();
+                renderSongs();
+            }
+        };
+        document.getElementById('showStorageBtn').onclick = updateStorageUI;
+        document.getElementById('closeStorageBtn').onclick = () => document.getElementById('storageModal').classList.add('hidden');
+        document.getElementById('clearAllCacheBtn').onclick = async () => {
+            if (!confirm('確定清空所有快取？')) return;
+            await api('/api/cache/all', { method: 'DELETE' });
+            updateStorageUI();
+        };
+        window.play = play;
+        window.addToPlaylist = addToPlaylist;
+        window.deleteSelected = deleteSelected;
+
+        if (token) showApp();
+    </script>
+</body>
+</html>
